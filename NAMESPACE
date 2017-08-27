@@ -2,6 +2,7 @@
 
 S3method(plot,precedence_matrix)
 export(frequency)
+export(fuzzy_process_map)
 export(performance)
 export(precedence_matrix)
 export(process_map)

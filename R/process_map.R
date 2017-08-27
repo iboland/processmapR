@@ -96,25 +96,23 @@ process_map <- function(eventlog, type = frequency("absolute") , render = T) {
 	# Calculate node frequency
 	nodes_freq <- eventlog %>%
 		activities() %>%
-		arrange_(activity_id(eventlog))
-
-
-
+		dplyr::arrange_(activity_id(eventlog)) %>%
+		dplyr::mutate(freq_sig = relative_frequency / max(relative_frequency))
 
 	# Create data frame of nodes information, based on if process map type is
 	# frequency based or peformance/processing time based
 	if(attr(type, "perspective") == "frequency") {
 		# Node values represent frequency
-		nodes <- node_freq
+		nodes <- nodes_freq
 
 	} else {
 		# Node values represent processing time (e.g. days)
 		nodes <- eventlog %>%
 			processing_time("activity", units = attr(type, "units")) %>%
 			attr("raw") %>%
-			group_by_(activity_id(eventlog)) %>%
+			group_by(event) %>%
 			summarize(absolute_frequency = type(processing_time)) %>%
-			arrange_(activity_id(eventlog))
+			arrange(event)
 	}
 
 	colnames(nodes)[colnames(nodes) == activity_id(eventlog)] <- "event"
