@@ -16,6 +16,9 @@
 #'   \code{frequency} and \code{performance}. The first type focusses on the
 #'   frequency aspect of a process, while the second one focusses on processing
 #'   time.
+#' @param duration_type function, if you use are creating a 'performance' type
+#'   map, the function to use to summarise time difference between event nodes.
+#'   Defaults to median.
 #' @param render logical, whether the map should be rendered immediately
 #'   (default), or rather an object of type dgr_graph should be returned.
 #' @param preserve_threshold number between 0 and 1, the preservation threshold
@@ -54,13 +57,12 @@
 #' }
 #' @export fuzzy_process_map
 
-fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
-	render = T, preserve_threshold = .5, ratio_threshold = .4,
-	utility_ratio = .5, edge_cutoff = .2, node_cutoff = 0) {
+fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
+	duration_type = median, render = T, preserve_threshold = .5,
+	ratio_threshold = .4, utility_ratio = .5, edge_cutoff = .2, node_cutoff = 0)
+	{
 
 	# Copy log and relabel variables used in process mapping
-	eventlog <- eventlog %>%
-		dplyr::mutate(node_id = as.numeric(as.factor(event)))
 
 	log <- eventlog
 
@@ -70,7 +72,13 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
 	colnames(log)[colnames(log) == activity_instance_id(eventlog)] <- "aid"
 
 
-	edges <- make_edge_table(log)
+	log <- log %>% mutate(node_id = as.numeric(as.factor(event)))
+
+	edges <- make_edge_table(log, type, duration_type)
+
+	# TODO make edge graph, calculate distances for use in attenuation
+	#edge_graph <- graph_from_data_frame(edges[,c('node_id', 'node_id_next',
+	#											 'rel_n')])
 
 	# TODO - investigate changing performance type edge info to time rather than
 	# numbers
@@ -87,8 +95,10 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
 		}
 
 	} else {
+		# Edge width based on time taken between events
 		edges <- edges %>%
-			dplyr::mutate(penwidth = 1 + 3 * (n - min(n))/(max(n) - min(n)))
+			dplyr::mutate(penwidth = 1 + 3 * (time_diff - min(time_diff))
+						  /	(max(time_diff) - min(time_diff)))
 	}
 
 	# Calculate node frequency significance
@@ -130,9 +140,9 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
 			nodes <- eventlog %>%
 				processing_time("activity", units = attr(type, "units")) %>%
 				attr("raw") %>%
-				group_by(event) %>%
+				group_by_(activity_id(eventlog)) %>%
 				summarize(absolute_frequency = type(processing_time)) %>%
-				arrange(event)
+				arrange_(activity_id(eventlog)) -> nodes
 		}
 
 	colnames(nodes)[colnames(nodes) == activity_id(eventlog)] <- "event"
@@ -182,10 +192,13 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
 								   tooltip = c("Start",paste0(nodes$event, "\n (",nodes$absolute_frequency, ")"), "End"))
 	}
 
+	#TODO - if performance is chosen, change label to character and relabel
+	# from current number of seconds to flowest floor (second, minute, hour, day)
+	# e.g. 70 seconds -> "1.x minutes"
 	# Create nodes_df input with nodes attributes for DiagrammeR graph
 	edges_df <- create_edge_df(from = edges$node_id +1,
 							   to= edges$next_node_id + 1,
-							   label = edges$n,
+							   label = edges$time_diff,
 							   color = "grey",
 							   fontname = "Arial",
 							   arrowsize = 1,
@@ -254,8 +267,7 @@ routing_sig <- function(edges, nodes_freq) {
 			   rout_sig = rout_sig/max(rout_sig))
 
 
-	# Combine node freq , pred and exits sigs into one number
-	unary_sig <- routing_sig$rout_sig +
+	unary_sig <- routing_sig$rout_sig
 
 	# Calculate node significance by node frequency and number of edges
 	nodes_sig <- nodes_freq
@@ -263,7 +275,7 @@ routing_sig <- function(edges, nodes_freq) {
 }
 
 # Function to create table of edges by node
-make_edge_table <- function(log) {
+make_edge_table <- function(log, type, duration_type) {
 
 	# Create vectors of process map nodes, including start and end states
 	start_points <- log %>%
@@ -280,7 +292,7 @@ make_edge_table <- function(log) {
 		dplyr::slice(1:1) %>%
 		dplyr::mutate(timestamp_classifier = timestamp_classifier + 1,
 					  event = "End",
-					  node_id = n_activities(eventlog) + 1)
+					  node_id = length(unique(log$event)) + 1)
 
 	# Create data frame of precending events for each event in the log by case
 	precedences <- log %>%
@@ -292,17 +304,30 @@ make_edge_table <- function(log) {
 		dplyr::arrange(ts) %>%
 		dplyr::mutate(next_event = lead(event),
 					  next_node_id = lead(node_id)) %>%
-		na.omit()
+		dplyr::filter(is.na(next_event) == F)
+	#na.omit()
+
+	# If time performance is chosen, get time between events
+	if (attr(type, "perspective") == "performance") {
+		edges <- precedences %>%
+			dplyr::mutate(time_diff_num = as.numeric(lead(ts) - ts)) %>%
+			dplyr::group_by(event, node_id, next_event, next_node_id) %>%
+			summarise(n = n(),
+					  time_diff = duration_type(time_diff_num),
+					  						  na.rm = T)
+	} else {
+		edges <- precedences %>%
+			dplyr::group_by(event, node_id, next_event, next_node_id) %>%
+			summarise(n = n())
+	}
 
 	# Create data frame of edge information
-	edges <- precedences %>%
-		dplyr::group_by(event, node_id, next_event, next_node_id) %>%
-		dplyr::summarize(n = n()) %>%
+	edges <- edges %>%
 		dplyr::group_by(event, node_id) %>%
 		dplyr::mutate(rel_n = n/(sum(n))) %>%
 		dplyr::ungroup() %>%
 		dplyr::mutate(edge_freq_sig = (n / max(n)),
 					  edge_freq_sig = edge_freq_sig / max(edge_freq_sig))
 
+	return(edges)
 }
-
