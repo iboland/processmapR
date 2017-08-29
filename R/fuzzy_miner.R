@@ -59,6 +59,9 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
 	utility_ratio = .5, edge_cutoff = .2, node_cutoff = 0) {
 
 	# Copy log and relabel variables used in process mapping
+	eventlog <- eventlog %>%
+		dplyr::mutate(node_id = as.numeric(as.factor(event)))
+
 	log <- eventlog
 
 	colnames(log)[colnames(log) == case_id(eventlog)] <- "case"
@@ -66,48 +69,8 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute") ,
 	colnames(log)[colnames(log) == timestamp(eventlog)] <- "timestamp_classifier"
 	colnames(log)[colnames(log) == activity_instance_id(eventlog)] <- "aid"
 
-	# Create vectors of process map nodes, including start and end states
-	log <- log %>%
-		dplyr::mutate(node_id = as.numeric(as.factor(event)))
 
-	start_points <- log %>%
-		dplyr::group_by(case) %>%
-		dplyr::arrange(timestamp_classifier) %>%
-		dplyr::slice(1:1) %>%
-		dplyr::mutate(timestamp_classifier = timestamp_classifier - 1,
-			   event = "Start",
-			   node_id = 0)
-
-	end_points <- log %>%
-		dplyr::group_by(case) %>%
-		dplyr::arrange(desc(timestamp_classifier)) %>%
-		dplyr::slice(1:1) %>%
-		dplyr::mutate(timestamp_classifier = timestamp_classifier + 1,
-			   event = "End",
-			   node_id = n_activities(eventlog)+1)
-
-	# Create data frame of precending events for each event in the log by case
-	precedences <- log %>%
-		dplyr::bind_rows(start_points) %>%
-		dplyr::bind_rows(end_points) %>%
-		dplyr::group_by(aid, event, node_id, case) %>%
-		dplyr::summarize(ts = min(timestamp_classifier)) %>%
-		dplyr::group_by(case) %>%
-		dplyr::arrange(ts) %>%
-		dplyr::mutate(next_event = lead(event),
-			   next_node_id = lead(node_id)) %>%
-		na.omit()
-
-	# Create data frame of edge information
-	edges <- precedences %>%
-		dplyr::group_by(event, node_id, next_event, next_node_id) %>%
-		dplyr::summarize(n = n()) %>%
-		dplyr::group_by(event, node_id) %>%
-		dplyr::mutate(rel_n = n/(sum(n))) %>%
-		dplyr::ungroup() %>%
-		dplyr::mutate(edge_freq_sig = (n / max(n)),
-			   edge_freq_sig = edge_freq_sig / max(edge_freq_sig))
-
+	edges <- make_edge_table(log)
 
 	# TODO - investigate changing performance type edge info to time rather than
 	# numbers
@@ -298,3 +261,48 @@ routing_sig <- function(edges, nodes_freq) {
 	nodes_sig <- nodes_freq
 
 }
+
+# Function to create table of edges by node
+make_edge_table <- function(log) {
+
+	# Create vectors of process map nodes, including start and end states
+	start_points <- log %>%
+		dplyr::group_by(case) %>%
+		dplyr::arrange(timestamp_classifier) %>%
+		dplyr::slice(1:1) %>%
+		dplyr::mutate(timestamp_classifier = timestamp_classifier - 1,
+					  event = "Start",
+					  node_id = 0)
+
+	end_points <- log %>%
+		dplyr::group_by(case) %>%
+		dplyr::arrange(desc(timestamp_classifier)) %>%
+		dplyr::slice(1:1) %>%
+		dplyr::mutate(timestamp_classifier = timestamp_classifier + 1,
+					  event = "End",
+					  node_id = n_activities(eventlog) + 1)
+
+	# Create data frame of precending events for each event in the log by case
+	precedences <- log %>%
+		dplyr::bind_rows(start_points) %>%
+		dplyr::bind_rows(end_points) %>%
+		dplyr::group_by(aid, event, node_id, case) %>%
+		dplyr::summarize(ts = min(timestamp_classifier)) %>%
+		dplyr::group_by(case) %>%
+		dplyr::arrange(ts) %>%
+		dplyr::mutate(next_event = lead(event),
+					  next_node_id = lead(node_id)) %>%
+		na.omit()
+
+	# Create data frame of edge information
+	edges <- precedences %>%
+		dplyr::group_by(event, node_id, next_event, next_node_id) %>%
+		dplyr::summarize(n = n()) %>%
+		dplyr::group_by(event, node_id) %>%
+		dplyr::mutate(rel_n = n/(sum(n))) %>%
+		dplyr::ungroup() %>%
+		dplyr::mutate(edge_freq_sig = (n / max(n)),
+					  edge_freq_sig = edge_freq_sig / max(edge_freq_sig))
+
+}
+
