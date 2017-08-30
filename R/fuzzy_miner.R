@@ -37,6 +37,10 @@
 #' @param node_cutoff  number between 0 and 1, this parameter determines the
 #'   aggressiveness of the node filtering algorithm.  A higher value results in
 #'   fewer nodes.
+#' @param freq_edge_cutoff  (TESTING PARAM) number between 0 and 1, this
+#'   parameter determines the how much significance of edge depends on the
+#'   frequency vs distance metric
+#'
 #'
 #' @details This function is based on the 'Fuzzy Mining' approach developed by
 #'  Christian W. Gunther and Wil M.P. van der Aalst, which they implemented in
@@ -59,7 +63,8 @@
 
 fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
 	duration_type = median, render = T, preserve_threshold = .5,
-	ratio_threshold = .4, utility_ratio = .5, edge_cutoff = .2, node_cutoff = 0)
+	ratio_threshold = .4, utility_ratio = .5, edge_cutoff = .2, node_cutoff = 0,
+	freq_edge_cutoff = .6)
 	{
 
 	# Copy log and relabel variables used in process mapping
@@ -74,15 +79,75 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
 
 	log <- log %>% mutate(node_id = as.numeric(as.factor(event)))
 
-	edges <- make_edge_table(log, type, duration_type)
+	edges <<- make_edge_table(log, type, duration_type)
 
-	# TODO make edge graph, calculate distances for use in attenuation
-	#edge_graph <- graph_from_data_frame(edges[,c('node_id', 'node_id_next',
-	#											 'rel_n')])
 
-	# TODO - investigate changing performance type edge info to time rather than
-	# numbers
-	# TODO - add cumulative option for performance time
+	# Make edge grap to calculate distances to determine attenuation levels
+	# between nodes
+	edge_graph <- igraph::graph_from_data_frame(
+		edges[, c('node_id', 'next_node_id', 'edge_freq_sig')])
+
+	node_distances <- igraph::distances(edge_graph)
+
+	# Calculate node frequency significance
+	nodes_freq <- eventlog %>%
+		activities() %>%
+		dplyr::arrange_(activity_id(eventlog)) %>%
+		dplyr::mutate(node_freq_sig = relative_frequency /
+					  	max(relative_frequency))
+
+	colnames(nodes_freq)[colnames(nodes_freq) == activity_id(eventlog)] <- "event"
+
+	# Calculate edge frequency significance and scale median time
+	edges_scale_sig <- edges %>%
+		dplyr::mutate(
+			edge_freq_sig = (n / max(n)),
+			edge_freq_sig = edge_freq_sig / max(edge_freq_sig)
+		)
+
+	# Calculate distance significance using edge freq significance and node freq
+	# signifcance.  The more the edge significance differs from the nodes, the
+	# lower the value.
+	# For start and end nodes, take the node freq significance value as being
+	# the freq significance of the edge.
+
+
+
+	dist_sig_df <<- edges %>%
+		dplyr::left_join(nodes_freq[, c(1, 4)], by = c("event")) %>%
+		dplyr::left_join(nodes_freq[, c(1, 4)], by = c("next_event" = "event")) %>%
+		#  dplyr::filter(is.na(node_freq_sig.x) == F & is.na(node_freq_sig.y) == F) %>%
+		dplyr::mutate(
+			node_freq_sig.x = dplyr::coalesce(node_freq_sig.x, edge_freq_sig),
+			node_freq_sig.y = dplyr::coalesce(node_freq_sig.y, edge_freq_sig),
+			dist_sig = pmax(0, 1 - abs(
+				2 * edge_freq_sig - node_freq_sig.x
+				- abs(node_freq_sig.y)
+			)),
+			edge_sig = freq_edge_cutoff * edge_freq_sig  + (1 - freq_edge_cutoff)
+			* dist_sig,
+			prox_cor = prox_med_scaled
+		)
+
+    # CALCULATE CORRELATIONS
+	# Calculate proximity calculation.  Median exponential value used to ensure
+	# good distribution between 0 and 1
+
+	prox_cor <- dist_sig_df %>%
+		prox_med_cor = exp(- prox_med / median(prox_med, na.rm = T))
+
+	# TODO Caluclate originator correlation (source system?)
+
+	# TODO Calculate endpoint correlation (acitivity names - used fasttext or
+	# java PROM code)
+
+	# TODO Calculate data type correlation - create and use event metadata function
+
+	# TODO investigate data value corr - but LEAVE FOR LAST
+
+	# TODO Calculate routing significance
+
+	# TODO - add cumulative option for performance time?
 	if(attr(type, "perspective") == "frequency") {
 		if(type == "absolute") {
 			edges <- edges %>%
@@ -101,49 +166,23 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
 						  /	(max(time_diff, na.rm = T) - min(time_diff, na.rm = T)))
 	}
 
-	# Calculate node frequency significance
-	nodes_freq <- eventlog %>%
-		activities() %>%
-		dplyr::arrange_(activity_id(eventlog)) %>%
-		dplyr::mutate(node_freq_sig = relative_frequency /
-					  	max(relative_frequency))
 
-	colnames(nodes_freq)[colnames(nodes_freq) == activity_id(eventlog)] <- "event"
 
-	# Calculate distance significance using edge freq significance and node freq
-	# signifcance.  The more the edge significance differs from the nodes, the
-	# lower the value
+	# Create data frame of nodes information, based on if process map type is
+	# frequency based or peformance/processing time based
+	if (attr(type, "perspective") == "frequency") {
+		# Node values represent frequency
+		nodes <- nodes_freq
 
-	dist_sig_df <- edges %>%
-		dplyr::left_join(nodes_freq[, c(1,4)], by = c("event")) %>%
-		dplyr::left_join(nodes_freq[, c(1,4)], by = c("next_event" = "event")) %>%
-		dplyr::filter(is.na(node_freq_sig.x) == F & is.na(node_freq_sig.y) == F) %>%
-		dplyr::mutate(dist_sig = pmax(0, 1 - abs(2 * edge_freq_sig - node_freq_sig.x
-										 - abs(node_freq_sig.y))))
-
-	# TODO Caluclate proximity correlation
-
-	# TODO Caluclate originator correlation
-
-	# TODO Calculate endpoint correlation
-
-	# TODO Calculate data type correlation
-
-		# Create data frame of nodes information, based on if process map type is
-		# frequency based or peformance/processing time based
-		if(attr(type, "perspective") == "frequency") {
-			# Node values represent frequency
-			nodes <- nodes_freq
-
-		} else {
-			# Node values represent processing time (e.g. days)
-			nodes <- eventlog %>%
-				processing_time("activity", units = attr(type, "units")) %>%
-				attr("raw") %>%
-				group_by_(activity_id(eventlog)) %>%
-				summarize(absolute_frequency = type(processing_time)) %>%
-				arrange_(activity_id(eventlog)) -> nodes
-		}
+	} else {
+		# Node values represent processing time (e.g. days)
+		nodes <- eventlog %>%
+			processing_time("activity", units = attr(type, "units")) %>%
+			attr("raw") %>%
+			group_by_(activity_id(eventlog)) %>%
+			summarize(absolute_frequency = type(processing_time)) %>%
+			arrange_(activity_id(eventlog)) -> nodes
+	}
 
 	colnames(nodes)[colnames(nodes) == activity_id(eventlog)] <- "event"
 
@@ -208,6 +247,7 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
 				   			  TRUE ~ NA_character_)
 			)
 	}
+
 	# Create nodes_df input with nodes attributes for DiagrammeR graph
 	edges_df <- create_edge_df(from = edges$node_id +1,
 							   to= edges$next_node_id + 1,
@@ -321,27 +361,35 @@ make_edge_table <- function(log, type, duration_type) {
 	#na.omit()
 
 	# If time performance is chosen, get time between events
-	if (attr(type, "perspective") == "performance") {
-		edges <- precedences %>%
-			dplyr::mutate(time_diff_num = as.numeric(lead(ts) - ts)) %>%
-			dplyr::group_by(event, node_id, next_event, next_node_id) %>%
-			summarise(n = n(),
-					  time_diff = duration_type(time_diff_num),
-					  						  na.rm = T)
-	} else {
-		edges <- precedences %>%
-			dplyr::group_by(event, node_id, next_event, next_node_id) %>%
-			summarise(n = n())
-	}
+	# if (attr(type, "perspective") == "performance") {
+	# 	edges <- precedences %>%
+	# 		dplyr::mutate(time_diff_num = as.numeric(lead(ts) - ts)) %>%
+	# 		dplyr::group_by(event, node_id, next_event, next_node_id) %>%
+	# 		summarise(n = n(),
+	# 				  time_diff = duration_type(time_diff_num),
+	# 				  						  na.rm = T)
+	# } else {
+	# 	edges <- precedences %>%
+	# 		dplyr::mutate(time_diff_num = as.numeric(lead(ts) - ts)) %>%
+	# 		dplyr::group_by(event, node_id, next_event, next_node_id) %>%
+	# 		summarise(n = n())
+	# }
 
-	# Create data frame of edge information
-	edges <- edges %>%
+	# Create data frame of edge information including time difference between
+	# events, time differences and
+	edges <- precedences %>%
+		dplyr::mutate(time_diff_num = as.numeric(lead(ts) - ts)) %>%
+		dplyr::group_by(event, node_id, next_event, next_node_id) %>%
+		summarise(
+			n = n(),
+			time_diff = duration_type(time_diff_num, na.rm = T),
+			prox_med = median(time_diff_num, na.rm = T)
+		) %>%
 		dplyr::group_by(event, node_id) %>%
-		dplyr::mutate(rel_n = n/(sum(n))) %>%
-		dplyr::ungroup() %>%
-		dplyr::mutate(edge_freq_sig = (n / max(n)),
-					  edge_freq_sig = edge_freq_sig / max(edge_freq_sig))
+		dplyr::mutate(rel_n = n / (sum(n))) %>%
+		dplyr::ungroup()
+	)
 
-	return(edges)
+return(edges)
 }
 
