@@ -97,8 +97,8 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
 	} else {
 		# Edge width based on time taken between events
 		edges <- edges %>%
-			dplyr::mutate(penwidth = 1 + 3 * (time_diff - min(time_diff))
-						  /	(max(time_diff) - min(time_diff)))
+			dplyr::mutate(penwidth = 1 + 3 * (time_diff - min(time_diff, na.rm = T))
+						  /	(max(time_diff, na.rm = T) - min(time_diff, na.rm = T)))
 	}
 
 	# Calculate node frequency significance
@@ -195,10 +195,23 @@ fuzzy_process_map <- function(eventlog, type = frequency("absolute"),
 	#TODO - if performance is chosen, change label to character and relabel
 	# from current number of seconds to flowest floor (second, minute, hour, day)
 	# e.g. 70 seconds -> "1.x minutes"
+
+	# Relabeling edges if performance time is used
+	if(attr(type, "perspective") == "performance") {
+		edges <- edges %>%
+			mutate(time_diff_label =
+				   	case_when(is.na(time_diff) ~ NA_character_,
+				   			  time_diff < 60 ~ paste(round(time_diff, 1), 'secs'),
+				   			  time_diff < 3600 ~ paste(round(time_diff / 60, 1) , 'mins'),
+				   			  time_diff < 86400 ~ paste(round(time_diff / 3600, 1), 'hrs'),
+				   			  !is.na(time_diff) ~ paste(round(time_diff / 86400, 1), 'days'),
+				   			  TRUE ~ NA_character_)
+			)
+	}
 	# Create nodes_df input with nodes attributes for DiagrammeR graph
 	edges_df <- create_edge_df(from = edges$node_id +1,
 							   to= edges$next_node_id + 1,
-							   label = edges$time_diff,
+							   label = edges$time_diff_label,
 							   color = "grey",
 							   fontname = "Arial",
 							   arrowsize = 1,
@@ -331,3 +344,4 @@ make_edge_table <- function(log, type, duration_type) {
 
 	return(edges)
 }
+
