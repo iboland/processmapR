@@ -4,9 +4,10 @@
 \alias{fuzzy_process_map}
 \title{Fuzzy Process Map}
 \usage{
-fuzzy_process_map(eventlog, type = frequency("absolute"), render = T,
-  preserve_threshold = 0.5, ratio_threshold = 0.4, utility_ratio = 0.5,
-  edge_cutoff = 0.2, node_cutoff = 0)
+fuzzy_process_map(eventlog, type = frequency("absolute"),
+  duration_type = median, render = T, preserve_threshold = 0.5,
+  ratio_threshold = 0.4, utility_ratio = 0.5, edge_cutoff = 0.2,
+  node_cutoff = 0, freq_edge_cutoff = 0.6)
 }
 \arguments{
 \item{eventlog}{eventlog, The event log object for which to create a process
@@ -16,6 +17,10 @@ map}
 \code{frequency} and \code{performance}. The first type focusses on the
 frequency aspect of a process, while the second one focusses on processing
 time.}
+
+\item{duration_type}{function, if you use are creating a 'performance' type
+map, the function to use to summarise time difference between event nodes.
+Defaults to median.}
 
 \item{render}{logical, whether the map should be rendered immediately
 (default), or rather an object of type dgr_graph should be returned.}
@@ -40,6 +45,10 @@ fewer edges.}
 \item{node_cutoff}{number between 0 and 1, this parameter determines the
 aggressiveness of the node filtering algorithm.  A higher value results in
 fewer nodes.}
+
+\item{freq_edge_cutoff}{(TESTING PARAM) number between 0 and 1, this
+parameter determines the how much significance of edge depends on the
+frequency vs distance metric}
 }
 \value{
 plots a proccess map if render = TRUE, otherwise returns a dgr_graph
